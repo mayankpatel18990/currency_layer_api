@@ -1,0 +1,6 @@
+name: Currency Layer API
+description: Define's a custom REST Resource for consuming Currency Layer API. 
+core: 8.x
+core_version_requirement: ^8 || ^9
+type: module
+package: Custom
