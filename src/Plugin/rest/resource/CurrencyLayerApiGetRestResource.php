@@ -32,73 +32,90 @@ class CurrencyLayerApiGetRestResource extends ResourceBase {
      * Responds to custom GET requests.
      * @return \Drupal\rest\ResourceResponse
      */
-    public function get() {
-        $response_data = '';
-
+    public function get(Request $request) {
+        $response_data = [];
         // get the environ variables
         $api_url = Settings::get('api_url', '');
-        $api_token = Settings::get('api_token', '');
-        
-        try { 
-            if (!empty(\Drupal::request()->query->has('source')) && !empty(\Drupal::request()->query->has('currencies'))) {
-                $source = \Drupal::request()->query->get('source');
-                $currencies = \Drupal::request()->query->get('currencies');
-                $options = [
-                    'headers' => [
-                        'Content-Type' => 'application/json',
-                        'apikey' => $api_token,
-                    ],
-                ];
+        $api_key = Settings::get('api_key', '');
+        $client = \Drupal::httpClient();
+        $options = [
+            'headers' => [
+                'apikey' => $api_key,
+            ],
+        ];
+        try {
+            if (!empty($request->query->all())) {
                 
-                //Build query parameters to pass in method with api url
-                $query = [
-                    'source' => $source,
-                    'currencies' => $currencies,
-                ];
-                $query_str = UrlHelper::buildQuery($query);
+                //get all query parameters from API
+                $query_params = $request->query->all();                
+                
+                //create api url with query string
+                $query_str = UrlHelper::buildQuery($query_params);
                 $url = $api_url . '?' . $query_str;
                 
-                //Get Request
-                $client = \Drupal::httpClient();
+                //creates a get request
                 $response = $client->get($url, $options);
+                $response_data = Json::decode($response->getBody()->getContents());
                 
-                $status_code = $response->getStatusCode();
-                if ($status_code == 200) {
-                    $response_data_json = Json::decode($response->getBody()->getContents());
-                    
-                    //Cache API code
-                    $cacheId = 'currency_layer_api:api_currency';    
-                    if ($cache = \Drupal::cache()->get($cacheId, true)) {
-                        $cached_data = $cache->data;
-                        return new JsonResponse($cached_data, 200, ['Content-Type'=> 'application/json']);
-                    }
-                    else {
-                        $response_data = \Drupal::cache()->set($cacheId, $response_data_json, \Drupal::time()->getRequestTime() + (86400));
-                        return new JsonResponse($response_data, 200, ['Content-Type'=> 'application/json']);
-                    }
+                //get the cacheId and cached data
+                $cacheId = $this->getCacheId($query_params);
+                if ($cache = \Drupal::cache()->get($cacheId)) {
+                    return new JsonResponse($cache->data);
                 }
-                else {
-                    return new JsonResponse(['error' => ['message' => 'Currency Api is not available', 'code' => '502'] ], 400, ['Content-Type'=> 'application/json']);
-                }
+                else {     
+                    if (!empty($response_data['success']) && $response_data['success'] === TRUE) {
+                        \Drupal::cache()->set($cacheId, $response_data, \Drupal::time()->getRequestTime() + (86400));
+                    }
+                } 
             }
             else {
-                $options = [
-                    'headers' => [
-                        'Content-Type' => 'application/json',
-                        'apikey' => $api_token,
-                    ],
-                ];
-                $client = \Drupal::httpClient();
                 $response = $client->get($api_url, $options);
                 $response_data = Json::decode($response->getBody()->getContents());
-                return new JsonResponse($response_data, 200, ['Content-Type'=> 'application/json']);
-            }
+            }              
         }
-        catch (RequestException $e) {
-            return new JsonResponse(['error' => ['message' => 'Currency Api is not available', 'code' => '502'] ], 400, ['Content-Type'=> 'application/json']);
-        } 
         catch (\Exception $e) {
-            return new JsonResponse(['error' => ['message' => 'Currency Api is not available', 'code' => '502'] ], 400, ['Content-Type'=> 'application/json']);
+            // If api is not working returns error
+            return new JsonResponse(['error' => ['message' => 'Currency Api is not available', 'code' => '502'] ], 502, ['Content-Type'=> 'application/json']);
         }
+        return new JsonResponse($response_data, 200, ['Content-Type'=> 'application/json']);
+    }
+      
+    /**
+     * This function helps us cache results regardless of the order of 
+     * query parameters that are passed in. 
+     *
+     * @param array $query_params
+     *   The query parameters.
+     *
+     * @return string
+     *   Returns cacheId.
+     */
+    public function getCacheId(array $query_params) {
+        ksort($query_params);
+        $cacheId = 'currency_layer_api:api_currency';
+        foreach ($query_params as $key => $value) {
+            $cacheId .= $this->getCacheIdValue($key, $value);
+        }
+        return $cacheId;
+    }
+    
+    /**
+     *
+     * This function helps work with both: ?currencies=EUR,GBP and ?currencies=GBP,EUR and
+     * same for other parameters.
+     *
+     * @param string $key
+     *   The query parameter name.
+     * @param string $value
+     *   The value of the query parameter.
+     *
+     * @return string
+     *   cacheId fragment generated.
+     */
+    public function getCacheIdValue($key, $value): string {
+        $value = explode(',', $value);
+        sort($value);
+        $sorted_value = implode(',', $value);
+        return "$key={$sorted_value}:";
     }
 }
